@@ -4,7 +4,7 @@ import multiprocessing
 from multiprocessing import Pool, shared_memory
 from pathlib import Path
 import pickle
-from functools import partial
+import matplotlib.pyplot as plt
 
 class Encoder:
     """
@@ -82,10 +82,11 @@ class ALSModel:
         """
         self.mu = mu        
         self.dim = dim
-        self.user_mat = np.random.random(size=(n_users, dim))
-        self.item_mat = np.random.random(size=(n_items, dim))
-        self.user_bias = np.random.random(size=(n_users, 1))
-        self.item_bias = np.random.random(size=(n_items, 1))
+        self.user_mat = np.random.normal(loc=0.0, scale=0.01 ,size=(n_users, dim))
+        self.item_mat = np.random.normal(loc=0.0, scale=0.01, size=(n_items, dim))
+
+        self.user_bias = np.zeros(shape=(n_users, 1))
+        self.item_bias = np.zeros(shape=(n_items, 1))
     
     def predict_rating(self, userid : int, itemid : int):
         """
@@ -99,7 +100,8 @@ class ALSModelTrainer:
     """
     def __init__(
             self,
-            regulariser: float,
+            regulariser_1: float,
+            regulariser_2: float,
             train_data: pd.DataFrame,
             validation_data: pd.DataFrame,
             dim: int,
@@ -124,7 +126,9 @@ class ALSModelTrainer:
         self.validation_data = validation_data[validation_data['productId'].isin(self.enc.item_id.keys())]
         self.validation_data = self.validation_data[self.validation_data['userId'].isin(self.enc.user_id.keys())]
         
-        self.regulariser = regulariser
+        self.regulariser_1 = regulariser_1
+        self.regulariser_2 = regulariser_2
+
         self.tol = tol
 
         self.user_vector_norms = np.zeros(
@@ -146,22 +150,23 @@ class ALSModelTrainer:
         items = user_df['productId'].map(lambda x: self.enc.item_id[x]).values # items user u rated
         item_vectors = self.model.item_mat[items]
             
-        denominator_matrix = item_vectors.T@item_vectors + self.regulariser*N*np.identity(self.model.dim)
+        denominator_matrix = item_vectors.T@item_vectors + self.regulariser_1*np.identity(self.model.dim)
 
-        user_ratings = user_df['rating'].values.reshape((-1,1))
+        user_ratings = user_df['rating'].values.reshape((-1,1)) - self.model.mu # centre the rating data
         user_bias = self.model.user_bias[u]
         item_bias = self.model.item_bias[items]
-        mu = self.model.mu
 
-        numerator_matrix = user_ratings*item_vectors - N*(mu + user_bias)*item_vectors - item_bias*item_vectors
+        numerator_matrix = user_ratings*item_vectors - user_bias*item_vectors - item_bias*item_vectors
         numerator_matrix = np.sum(numerator_matrix, axis=0, keepdims=True).reshape((-1,1))  
             
-        updated_pu = np.linalg.pinv(denominator_matrix)@numerator_matrix # update user vector
+        # updated_pu = np.linalg.pinv(denominator_matrix)@numerator_matrix # update user vector
+        updated_pu = np.linalg.solve(denominator_matrix, numerator_matrix) # update user vector
         updated_pu = updated_pu.flatten()
+        # updated_pu = updated_pu/ (np.linalg.norm(updated_pu) + 10**(-8))
 
         user_vector = self.model.user_mat[u].reshape((-1,1))
-        updated_bias = np.sum(user_ratings.flatten()) - N*mu - np.sum(item_bias.flatten()) - np.sum((item_vectors@user_vector).flatten())
-        updated_bias = updated_bias/(self.regulariser*N + 1)
+        updated_bias = np.sum(user_ratings.flatten()) -  np.sum(item_bias.flatten()) - np.sum((item_vectors@user_vector).flatten())
+        updated_bias = updated_bias/(self.regulariser_2 + N)
 
         # open shared memory
         sham_user_mat = shared_memory.SharedMemory(name='user_mat')
@@ -197,22 +202,23 @@ class ALSModelTrainer:
         users = item_df['userId'].map(lambda x: self.enc.user_id[x]).values # users items i rated by
         user_vectors = self.model.user_mat[users]
             
-        denominator_matrix = user_vectors.T@user_vectors + self.regulariser*M*np.identity(self.model.dim)
+        denominator_matrix = user_vectors.T@user_vectors + self.regulariser_1*np.identity(self.model.dim)
 
-        item_ratings = item_df['rating'].values.reshape((-1,1))
+        item_ratings = item_df['rating'].values.reshape((-1,1)) - self.model.mu # centre the data
         item_bias = self.model.item_bias[i]
         user_bias = self.model.user_bias[users]
-        mu = self.model.mu
 
-        numerator_matrix = item_ratings*user_vectors - M*(mu + item_bias)*user_vectors - user_bias*user_vectors
+        numerator_matrix = item_ratings*user_vectors - item_bias*user_vectors - user_bias*user_vectors
         numerator_matrix = np.sum(numerator_matrix, axis=0, keepdims=True).reshape((-1,1))  
             
-        updated_qi = np.linalg.pinv(denominator_matrix)@numerator_matrix # update user vector
+        # updated_qi = np.linalg.pinv(denominator_matrix)@numerator_matrix # update user vector
+        updated_qi = np.linalg.solve(denominator_matrix, numerator_matrix) # update user vector
         updated_qi = updated_qi.flatten()
+        # updated_qi = updated_qi/(np.linalg.norm(updated_qi) + 10**(-7))
 
         item_vector = self.model.item_mat[i].reshape((-1,1))
-        updated_bias = np.sum(item_ratings.flatten()) - M*mu - np.sum(user_bias.flatten()) - np.sum((user_vectors@item_vector).flatten())
-        updated_bias = updated_bias/(self.regulariser*M + 1)
+        updated_bias = np.sum(item_ratings.flatten()) - np.sum(user_bias.flatten()) - np.sum((user_vectors@item_vector).flatten())
+        updated_bias = updated_bias/(self.regulariser_2 + M)
 
         # open shared memory
         sham_item_mat = shared_memory.SharedMemory(name='item_mat')
@@ -306,6 +312,7 @@ class ALSModelTrainer:
                 self.model.item_mat[:] = self.updated_item_mat[:]
                 self.model.item_bias[:] = self.updated_item_bias[:]
             
+            
             # Run validation
             self.batch_predict(self.validation_data)
             self.batch_predict(self.train_data)
@@ -318,22 +325,33 @@ class ALSModelTrainer:
             self.train_mse.append(train_mse)
             self.val_mse.append(val_mse)
             
-            # Save best model
-            self.save_model()
-                
+            # Save latest model
+            self.save_model(t)
+        
+        self.plot_result()        
 
         sham_user_mat.close()
         sham_user_mat.unlink()
         sham_item_mat.close()
         sham_item_mat.unlink()
     
+    def plot_result(self):
+        plt.plot(self.val_mse, label='val-mse')
+        plt.plot(self.train_mse, label='train-mse')
+        plt.legend()
+        plt.xlabel('Iteration')
+        plt.ylabel('MSE Loss')
+        plt.title(f'Train & Val loss | Reg-1: {self.regulariser_1} & Reg-2: {self.regulariser_2}')
+        plt.savefig(Path.cwd()/f'models/MF_ALS/result.png')
+        plt.show()
+
     def batch_predict(self, data: pd.DataFrame, upper_cap=5.0, lower_cap=0.5):
         def predict(userId, productId):
             user = self.enc.user_id[userId],
             item = self.enc.item_id[productId]
             rating = self.model.predict_rating (user, item)[0] #type: ignore
-            rating = min(rating, upper_cap)
-            rating = max(rating, lower_cap)
+            # rating = min(rating, upper_cap)
+            # rating = max(rating, lower_cap)
             return rating
         
         data['prediction'] = data.apply(lambda x: predict(x['userId'], x['productId']), axis=1)
@@ -344,19 +362,19 @@ class ALSModelTrainer:
             pickle.dump(self.enc, f)
             f.close()
 
-    def save_model(self):
-        bestpath = Path.cwd()/f'models/MF_ALS/best.pkl'
-        if np.max(self.val_mse) == self.val_mse[-1]:
-            with open(bestpath, "wb") as f:
-                pickle.dump(self.model, f)
-                f.close()
+    def save_model(self, t):
+        bestpath = Path.cwd()/f'models/MF_ALS/epoch_{t}.pkl'
+        # if np.max(self.val_mse) == self.val_mse[-1]:
+        with open(bestpath, "wb") as f:
+            pickle.dump(self.model, f)
+            f.close()
     
 class ALSInference:
-    def __init__(self):
+    def __init__(self, modelname):
         """
         Load the best model and encoder from pre-defined path
         """ 
-        modelpath = Path.cwd()/'models/MF_ALS/best.pkl'
+        modelpath = Path.cwd()/f'models/MF_ALS/{modelname}.pkl'
         encpath = Path.cwd()/'models/MF_ALS/encoder.pkl'
         with open(modelpath, "rb") as f:
             self.model = pickle.load(f)
@@ -371,8 +389,8 @@ class ALSInference:
         Recommend top_k products to the the userId
         """
         user = self.enc.user_id[userId]
-        predictions = np.apply_along_axis(
-            func1d=partial(self.model.predict_rating, user),
-            arr=self.products,
-            axis=0
-        )
+        user_arr = np.full(shape=self.products.shape, fill_value=user)
+        vec_predict = np.vectorize(self.model.predict_rating)
+        predictions = vec_predict(user_arr, self.products)
+        topk_pos = np.argsort(predictions)[::-1][:top_k]
+        return [self.enc.id_item[i] for i in topk_pos], predictions[topk_pos]
