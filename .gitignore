@@ -3,5 +3,7 @@ data/*/*.csv
 deleted
 data
 train_logs/MF
+train_logs/MF_temporal
+
 
 
