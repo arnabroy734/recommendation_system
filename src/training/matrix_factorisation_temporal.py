@@ -54,6 +54,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from numba import njit, prange
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -97,7 +98,7 @@ class TemporalMFModel:
         dim: int,
         n_bins: int,
         mu: float,
-        alpha_init: float = 0.001,
+        alpha_init: float = 0.1,
     ):
         self.dim    = dim
         self.n_bins = n_bins
@@ -141,6 +142,15 @@ class TemporalMFModel:
             + self.b_i[i]
             + self.B_bin[i, bin_t]
             + p_u_t @ self.Q[i]
+        )
+    def predict_temporal_batch(self, u: int, item_indices: np.ndarray, dev: float) -> np.ndarray:
+        """Temporal prediction for eval — uses dev term, no bin."""
+        p_u_t = self.P[u] + dev * self.Alpha[u]
+        return (
+            self.mu
+            + self.b_u[u]
+            + self.b_i[item_indices]
+            + self.Q[item_indices] @ p_u_t
         )
 
 
@@ -229,20 +239,6 @@ def compute_temporal_features(
     return t_days, t_u_arr, T, n_bins
 
 
-def compute_dev(t: float, t_u: float, T: float, beta: float) -> float:
-    """
-    dev_u(t) = sign(t - t_u) * |(t - t_u) / T|^beta
-    Normalised by T so dev is always in [-1, +1].
-    """
-    diff = t - t_u
-    if diff == 0.0:
-        return 0.0
-    return float(np.sign(diff) * (abs(diff) / T) ** beta)
-
-
-def compute_bin(t: float, n_bins: int) -> int:
-    """Map t_days to monthly bin index."""
-    return min(int(t // 30), n_bins - 1)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -301,85 +297,148 @@ class NegativeSampler:
 #         - replace compute_dev/compute_bin with inline math
 # ══════════════════════════════════════════════════════════════════════════
 
+@njit(parallel=False)
 def train_one_epoch_bpr_temporal(
-    model: TemporalMFModel,
-    interactions: np.ndarray,
-    neg_samples: np.ndarray,
-    t_u_arr: np.ndarray,
-    T: float,
-    beta: float,
-    lr: float,
-    reg1: float,
-    reg2: float,
-) -> float:
-    """
-    One SGD epoch for temporal BPR.
-
-    Args:
-        interactions : int32 (N, 2) — [u_idx, i_idx]
-        neg_samples  : int32 (N, n_neg) — pre-sampled negatives
-        t_u_arr      : float32 (n_users,) — mean timestamp per user
-        T            : training window length in days
-        beta         : dev exponent
-        lr, reg1, reg2 : hyperparameters
-
-    NOTE: t_days is stored in interactions[:,2] as float32.
-          interactions is float32 (N, 3) — [u_idx, i_idx, t_days]
-    """
+    P, Q, b_i, B_bin, Alpha,
+    interactions, neg_samples,
+    t_u_arr,
+    T, beta, lr, reg1, reg2, n_bins
+):
     N          = interactions.shape[0]
     n_neg      = neg_samples.shape[1]
-    total_loss = 0.0
+    total_loss = np.float32(0.0)
 
-    # shuffle interaction order each epoch
-    perm = np.random.permutation(N)
-
-    for idx in perm:
+    for idx in prange(N):
         u     = int(interactions[idx, 0])
         i     = int(interactions[idx, 1])
-        t     = float(interactions[idx, 2])
-        t_u   = float(t_u_arr[u])
-        bin_t = compute_bin(t, model.n_bins)
-        dev   = compute_dev(t, t_u, T, beta)
+        t     = interactions[idx, 2]
+        t_u   = t_u_arr[u]
 
-        # temporal user embedding and precomputed reusable terms
-        p_u_t = model.P[u] + dev * model.Alpha[u]   # shape (dim,)
+        # inline dev_u(t)
+        diff = t - t_u
+        if diff == 0.0:
+            dev = np.float32(0.0)
+        else:
+            dev = np.sign(diff) * (np.abs(diff) / T) ** beta
+
+        # inline bin(t)
+        bin_t = min(int(t // 30), n_bins - 1)
+
+        # temporal user embedding — compute once per interaction
+        p_u_t = P[u] + dev * Alpha[u]   # shape (dim,)
 
         for n in range(n_neg):
-            j = int(neg_samples[idx, n])
+            j  = neg_samples[idx, n]
+            dq = Q[i] - Q[j]
 
-            # ── score difference ──────────────────────────────────────────
-            dq       = model.Q[i] - model.Q[j]          # (dim,) reuse below
-            b_diff   = (
-                (model.b_i[i] - model.b_i[j])
-                + (model.B_bin[i, bin_t] - model.B_bin[j, bin_t])
+            b_diff = (
+                (b_i[i] - b_i[j])
+                + (B_bin[i, bin_t] - B_bin[j, bin_t])
             )
-            r_uij    = b_diff + float(p_u_t @ dq)
+            r_uij = b_diff + np.dot(p_u_t, dq)
 
-            # ── error signal ──────────────────────────────────────────────
-            sig      = 1.0 / (1.0 + np.exp(-np.clip(r_uij, -30.0, 30.0)))
-            theta    = 1.0 - sig
-            total_loss += -np.log(sig + 1e-10)
+            # clip and sigmoid
+            r_clip = r_uij
+            if r_clip > 30.0:
+                r_clip = np.float32(30.0)
+            elif r_clip < -30.0:
+                r_clip = np.float32(-30.0)
 
-            # ── base item biases ──────────────────────────────────────────
-            model.b_i[i] += lr * (theta  - reg2 * model.b_i[i])
-            model.b_i[j] -= lr * (theta  + reg2 * model.b_i[j])
+            sig        = np.float32(1.0) / (np.float32(1.0) + np.exp(-r_clip))
+            theta      = np.float32(1.0) - sig
+            total_loss += -np.log(sig + np.float32(1e-10))
 
-            # ── monthly item bias deviations ──────────────────────────────
-            model.B_bin[i, bin_t] += lr * (theta  - reg2 * model.B_bin[i, bin_t])
-            model.B_bin[j, bin_t] -= lr * (theta  + reg2 * model.B_bin[j, bin_t])
+            # item biases
+            b_i[i] += lr * (theta - reg2 * b_i[i])
+            b_i[j] -= lr * (theta + reg2 * b_i[j])
 
-            # ── base user embedding ───────────────────────────────────────
-            model.P[u] += lr * (theta * dq - reg1 * model.P[u])
+            # bin biases
+            B_bin[i, bin_t] += lr * (theta - reg2 * B_bin[i, bin_t])
+            B_bin[j, bin_t] -= lr * (theta + reg2 * B_bin[j, bin_t])
 
-            # ── drift coefficient ─────────────────────────────────────────
-            model.Alpha[u] += lr * (theta * dev * dq - reg1 * model.Alpha[u])
+            # base user embedding
+            for d in range(P.shape[1]):
+                P[u, d] += lr * (theta * dq[d] - reg1 * P[u, d])
 
-            # ── item embeddings (use p_u_t computed before updates) ───────
-            model.Q[i] += lr * (theta * p_u_t - reg1 * model.Q[i])
-            model.Q[j] -= lr * (theta * p_u_t + reg1 * model.Q[j])
+            # drift coefficient
+            for d in range(Alpha.shape[1]):
+                Alpha[u, d] += lr * (theta * dev * dq[d] - reg1 * Alpha[u, d])
+
+            # item embeddings
+            for d in range(Q.shape[1]):
+                Q[i, d] += lr * (theta * p_u_t[d] - reg1 * Q[i, d])
+                Q[j, d] -= lr * (theta * p_u_t[d] + reg1 * Q[j, d])
 
     return total_loss / max(N * n_neg, 1)
 
+@njit(parallel=False)
+def train_one_epoch_mse_temporal(
+    P, Q, b_i, b_u, B_bin, Alpha,
+    interactions, ratings,
+    t_u_arr,
+    mu,
+    T, beta, lr, reg1, reg2, n_bins
+):
+    """
+    interactions: (N, 3) -> [u, i, t_days]
+    ratings:      (N,)   -> r_ui
+    """
+
+    N = interactions.shape[0]
+    total_loss = np.float32(0.0)
+
+    for idx in prange(N):
+        u = int(interactions[idx, 0])
+        i = int(interactions[idx, 1])
+        t = interactions[idx, 2]
+        r_ui = ratings[idx]
+
+        t_u = t_u_arr[u]
+
+        # ---- dev_u(t)
+        diff = t - t_u
+        if diff == 0.0:
+            dev = np.float32(0.0)
+        else:
+            dev = np.sign(diff) * (np.abs(diff) / T) ** beta
+
+        # ---- bin(t)
+        bin_t = min(int(t // 30), n_bins - 1)
+
+        # ---- temporal user embedding
+        p_u_t = P[u] + dev * Alpha[u]
+
+        # ---- prediction (same structure as your model)
+        r_hat = (
+            mu
+            + b_u[u]
+            + b_i[i]
+            + B_bin[i, bin_t]
+            + np.dot(p_u_t, Q[i])
+        )
+
+        # ---- error
+        err = r_ui - r_hat
+        total_loss += 0.5 * err * err
+
+        # ---- biases
+        b_u[u] += lr * (err - reg2 * b_u[u])
+        b_i[i] += lr * (err - reg2 * b_i[i])
+        B_bin[i, bin_t] += lr * (err - reg2 * B_bin[i, bin_t])
+
+        # ---- user embedding
+        for d in range(P.shape[1]):
+            P[u, d] += lr * (err * Q[i, d] - reg1 * P[u, d])
+
+        # ---- drift term
+        for d in range(Alpha.shape[1]):
+            Alpha[u, d] += lr * (err * dev * Q[i, d] - reg1 * Alpha[u, d])
+
+        # ---- item embedding
+        for d in range(Q.shape[1]):
+            Q[i, d] += lr * (err * p_u_t[d] - reg1 * Q[i, d])
+
+    return total_loss / max(N, 1)
 
 # ══════════════════════════════════════════════════════════════════════════
 # Saving
@@ -483,6 +542,7 @@ def run_eval_windows(
     train_df: pd.DataFrame,
     args,
     log_dir: Path,
+    t_u_arr, T       
 ):
     end_dt           = pd.Timestamp(args.end)
     all_item_indices = np.array(list(enc.id_item.keys()))
@@ -499,6 +559,10 @@ def run_eval_windows(
     for m in range(1, args.eval_months + 1):
         ws = (end_dt + relativedelta(months=m - 1)).strftime("%Y-%m-%d")
         we = (end_dt + relativedelta(months=m)).strftime("%Y-%m-%d")
+
+        # midpoint of eval window = window_start + 15 days
+        eval_mid = pd.Timestamp(ws) + pd.Timedelta(days=15)
+        t_star   = float((eval_mid - pd.Timestamp(args.start)).days)
 
         logger.info(f"\nEval window {m}: {ws} → {we}")
 
@@ -528,7 +592,10 @@ def run_eval_windows(
                 continue
 
             # base prediction — no temporal terms at serving time
-            scores     = model.predict_base_batch(u, unseen)
+            # scores     = model.predict_base_batch(u, unseen)
+            diff = t_star - float(t_u_arr[u])
+            dev  = float(np.sign(diff) * (abs(diff) / T) ** args.beta) if diff != 0.0 else 0.0
+            scores = model.predict_temporal_batch(u, unseen, dev)
             top_idx    = np.argsort(scores)[::-1][:args.top_n_recs]
             top_items  = unseen[top_idx]
             top_scores = scores[top_idx]
@@ -672,6 +739,8 @@ def parse_args():
     # output
     p.add_argument("--log_root",   type=str,
                    default="train_logs/MF_temporal")
+    p.add_argument("--loss", type=str, default="bpr",
+               choices=["bpr", "mse"])
 
     return p.parse_args()
 
@@ -685,7 +754,7 @@ def main():
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = (
         Path(args.log_root)
-        / f"{args.start}_{args.end}_{run_tag}_temporal_dim{args.dim}"
+        / f"{args.start}_{args.end}_{run_tag}_temporal_{args.loss}_dim{args.dim}"
     )
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -743,9 +812,11 @@ def main():
     df_copy["t_days"] = t_days_arr
 
     inter_arr = df_copy[["u_idx", "i_idx", "t_days"]].values.astype(np.float32)
+    ratings_arr = df_copy["rating"].values.astype(np.float32)
 
     # ── negative sampler ──────────────────────────────────────────────────
-    sampler = NegativeSampler(train_df, enc, n_neg=args.n_neg)
+    if args.loss == "bpr":
+        sampler = NegativeSampler(train_df, enc, n_neg=args.n_neg)
 
     # ── training loop ─────────────────────────────────────────────────────
     train_losses = []
@@ -755,22 +826,48 @@ def main():
         t_ep = time.time()
 
         # pre-sample all negatives for this epoch
-        neg_samples = np.array(
-            [sampler.sample(int(inter_arr[idx, 0])) for idx in range(len(inter_arr))],
-            dtype=np.int32,
-        )   # shape (N, n_neg)
+        if args.loss == "bpr":
+            neg_samples = np.array(
+                [sampler.sample(int(inter_arr[idx, 0])) for idx in range(len(inter_arr))],
+                dtype=np.int32,
+            )   # shape (N, n_neg)
 
-        loss = train_one_epoch_bpr_temporal(
-            model      = model,
-            interactions = inter_arr,
-            neg_samples  = neg_samples,
-            t_u_arr    = t_u_arr,
-            T          = T,
-            beta       = args.beta,
-            lr         = args.lr,
-            reg1       = args.reg1,
-            reg2       = args.reg2,
-        )
+        # np.random.shuffle(inter_arr)   # shuffle outside numba
+        perm = np.random.permutation(len(inter_arr))
+        inter_arr   = inter_arr[perm]
+        ratings_arr = ratings_arr[perm]
+
+        if args.loss == "bpr":
+            loss = train_one_epoch_bpr_temporal(
+                model.P, model.Q, model.b_i, model.B_bin, model.Alpha,
+                inter_arr, neg_samples,
+                t_u_arr,
+                np.float32(T),
+                np.float32(args.beta),
+                np.float32(args.lr),
+                np.float32(args.reg1),
+                np.float32(args.reg2),
+                model.n_bins
+            )
+        elif args.loss == "mse": 
+            loss = train_one_epoch_mse_temporal(
+                model.P,
+                model.Q,
+                model.b_i,
+                model.b_u,          # only used in MSE
+                model.B_bin,
+                model.Alpha,
+                inter_arr,
+                ratings_arr,
+                t_u_arr,
+                np.float32(mu),
+                np.float32(T),
+                np.float32(args.beta),
+                np.float32(args.lr),
+                np.float32(args.reg1),
+                np.float32(args.reg2),
+                model.n_bins
+            )
 
         train_losses.append(loss)
         elapsed = time.time() - t_ep
@@ -789,7 +886,8 @@ def main():
     logger.info("Starting multi-month evaluation (base parameters) ...")
     logger.info("=" * 60)
 
-    summary_rows = run_eval_windows(model, enc, db, train_df, args, log_dir)
+    # summary_rows = run_eval_windows(model, enc, db, train_df, args, log_dir)
+    summary_rows = run_eval_windows(model, enc, db, train_df, args, log_dir, t_u_arr, T)
 
     if summary_rows:
         summary_df   = pd.DataFrame(summary_rows)
