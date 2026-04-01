@@ -10,5 +10,6 @@ explore.ipynb
 *.pkl
 *.npy
 *.pt
+*.db
 
 
