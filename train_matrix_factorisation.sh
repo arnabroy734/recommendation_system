@@ -2,13 +2,13 @@
 
 # ── Data ──────────────────────────────────────────────
 DATA_DIR="data/ml-32m"
-START="2016-06-30"
+START="2018-01-01"
 END="2018-06-30"
 
 # ── Model ─────────────────────────────────────────────
 LOSS="bpr"           # mse or bpr
 DIM=64
-EPOCHS=30
+EPOCHS=20
 LR=0.005
 REG1=0.01
 REG2=0.01
@@ -16,14 +16,14 @@ N_NEG=4              # negatives per positive (BPR only)
 
 # ── Cold start filters ────────────────────────────────
 MIN_RATING=3.0
-MIN_U_RAT=10
-MIN_I_RAT=10
+MIN_U_RAT=5
+MIN_I_RAT=5
 
 # ── Evaluation ────────────────────────────────────────
 EVAL_MONTHS=5
-EVAL_K="5 10 20"
-MIN_EVAL_RATINGS="10"
-TOP_N_RECS=50
+EVAL_K="5 10 20 100 300 500"
+MIN_EVAL_RATINGS="5"
+TOP_N_RECS=600
 
 # ── Output ────────────────────────────────────────────
 LOG_ROOT="train_logs/MF"

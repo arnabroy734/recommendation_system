@@ -25,9 +25,9 @@ MIN_I_RAT=10
 
 # ── Evaluation ────────────────────────────────────────
 EVAL_MONTHS=5
-EVAL_K="5 10 20"
+EVAL_K="5 10 20 100 300 500"
 MIN_EVAL_RATINGS="10"
-TOP_N_RECS=50
+TOP_N_RECS=600
 
 # ── Output ────────────────────────────────────────────
 LOG_ROOT="train_logs/SASREC"
@@ -53,4 +53,5 @@ python src/training/sasrec.py \
     --eval_k            $EVAL_K \
     --min_eval_ratings  $MIN_EVAL_RATINGS \
     --top_n_recs        $TOP_N_RECS \
-    --log_root          $LOG_ROOT
+    --log_root          $LOG_ROOT \
+    # --use_genre

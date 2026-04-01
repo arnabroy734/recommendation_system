@@ -1,7 +1,16 @@
 import pandas as pd
 import os
 from datetime import datetime
+import numpy as np
 
+# -------------------------------------------------------------------------
+# Genre Vocabulary (fixed ordering — never change after first use)
+# -------------------------------------------------------------------------
+GENRE_VOCAB = [
+    "Action", "Thriller", "Sci-Fi", "Horror", "Romance",
+    "Drama", "Adventure", "Documentary", "Crime", "Comedy",
+    "Mystery", "Children"
+]
 
 class MovieLensDB:
     """
@@ -15,6 +24,8 @@ class MovieLensDB:
         self.movies_df = None
         self.links_df = None
         self._loaded = False
+        self._genre_index = {}       # ← ADD: movieId -> set of genres
+        self._genre_vocab = GENRE_VOCAB  # ← ADD
 
     # -------------------------------------------------------------------------
     # Data Loading
@@ -32,6 +43,10 @@ class MovieLensDB:
         print("Loading movies...")
         self.movies_df = pd.read_csv(os.path.join(self.data_dir, "movies.csv"))
         self.movies_df["genres"] = self.movies_df["genres"].str.split("|")
+        self._genre_index = {
+            row["movieId"]: set(row["genres"])
+            for _, row in self.movies_df.iterrows()
+        }
 
         print("Loading links...")
         self.links_df = pd.read_csv(os.path.join(self.data_dir, "links.csv"))
@@ -277,6 +292,60 @@ class MovieLensDB:
             "std": round(counts.std(), 2)
         }
 
+    # -------------------------------------------------------------------------
+    # Genre Operations
+    # -------------------------------------------------------------------------
+
+    @property
+    def genre_vocab(self) -> list:
+        """Return the ordered genre vocabulary list.
+        Index position = position in one-hot vector."""
+        return self._genre_vocab
+
+    def get_genre_vector(self, movie_id: int) -> np.ndarray:
+        """
+        Return a 12-dim float32 one-hot vector for a given movie.
+
+        Vector ordering follows GENRE_VOCAB:
+            [Action, Thriller, Sci-Fi, Horror, Romance,
+            Drama, Adventure, Documentary, Crime, Comedy, Mystery, Children]
+
+        Returns a zero vector for unknown movies (cold-start safe).
+
+        Args:
+            movie_id : original MovieLens movieId
+
+        Returns:
+            np.ndarray of shape (12,) with dtype float32
+        """
+        self._check_loaded()
+        vec = np.zeros(len(self._genre_vocab), dtype=np.float32)
+        genres = self._genre_index.get(movie_id, set())
+        for idx, genre in enumerate(self._genre_vocab):
+            if genre in genres:
+                vec[idx] = 1.0
+        return vec
+
+    def get_genre_vectors_batch(self, movie_ids: list) -> np.ndarray:
+        """
+        Return genre one-hot vectors for a list of movie IDs.
+
+        Use this in SASRec data loading to vectorize an entire
+        user sequence in one call.
+
+        Args:
+            movie_ids : list of original MovieLens movieIds, length N
+
+        Returns:
+            np.ndarray of shape (N, 12) with dtype float32
+            Rows preserve the order of movie_ids.
+            Unknown movies produce zero rows (cold-start safe).
+        """
+        self._check_loaded()
+        return np.stack(
+            [self.get_genre_vector(mid) for mid in movie_ids],
+            axis=0
+        )
 
 # -----------------------------------------------------------------------------
 # Quick sanity check
@@ -315,3 +384,10 @@ if __name__ == "__main__":
 
     print("\n--- Popular Movies (top 5) ---")
     print(db.get_popular_movies(top_n=5)[["movieId", "title", "rating_count"]])
+
+    print("\n--- Genre Vector (movieId=1) ---")
+    print(db.genre_vocab)
+    print(db.get_genre_vector(1))
+
+    print("\n--- Batch Genre Vectors (movieIds=[1, 2, 3]) ---")
+    print(db.get_genre_vectors_batch([1, 2, 3]))  # shape (3, 12)

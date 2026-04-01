@@ -1,0 +1,72 @@
+2026-03-19 18:27:36,411 | INFO | Run: 20260319_182736 | loss=bpr | dim=64 | lr=0.005 | reg1=0.01 | reg2=0.01
+2026-03-19 18:27:36,411 | INFO | Log dir: train_logs/MF/2010-01-01_2010-06-30_20260319_182736_bpr_dim64
+2026-03-19 18:27:52,145 | INFO | Loading data from 2010-01-01 to 2010-06-30 ...
+2026-03-19 18:27:52,251 | INFO | Raw interactions: 392,511
+2026-03-19 18:27:52,258 | INFO | After rating >= 3.0: 317,796
+2026-03-19 18:27:52,296 | INFO | After co-filtering (iters=5): 289,569 interactions | 4,329 users | 3,693 items
+2026-03-19 18:27:52,373 | INFO | Encoded 4,329 users and 3,693 items
+2026-03-19 18:27:52,381 | INFO | Model initialised | mu=3.9156
+2026-03-19 18:27:52,394 | INFO | Building per-user positive sets for negative sampling ...
+2026-03-19 18:28:05,828 | INFO | Epoch   1/20 | loss=0.685649 | time=13.3s
+2026-03-19 18:28:17,975 | INFO | Epoch   2/20 | loss=0.684455 | time=12.1s
+2026-03-19 18:28:30,142 | INFO | Epoch   3/20 | loss=0.684420 | time=12.2s
+2026-03-19 18:28:42,319 | INFO | Epoch   4/20 | loss=0.684297 | time=12.2s
+2026-03-19 18:28:54,507 | INFO | Epoch   5/20 | loss=0.683641 | time=12.2s
+2026-03-19 18:29:07,100 | INFO | Epoch   6/20 | loss=0.680858 | time=12.6s
+2026-03-19 18:29:19,697 | INFO | Epoch   7/20 | loss=0.672723 | time=12.6s
+2026-03-19 18:29:31,829 | INFO | Epoch   8/20 | loss=0.658113 | time=12.1s
+2026-03-19 18:29:43,941 | INFO | Epoch   9/20 | loss=0.637390 | time=12.1s
+2026-03-19 18:29:56,069 | INFO | Epoch  10/20 | loss=0.613644 | time=12.1s
+2026-03-19 18:30:08,197 | INFO | Epoch  11/20 | loss=0.589124 | time=12.1s
+2026-03-19 18:30:20,376 | INFO | Epoch  12/20 | loss=0.566986 | time=12.2s
+2026-03-19 18:30:32,554 | INFO | Epoch  13/20 | loss=0.547411 | time=12.2s
+2026-03-19 18:30:44,759 | INFO | Epoch  14/20 | loss=0.529948 | time=12.2s
+2026-03-19 18:30:57,963 | INFO | Epoch  15/20 | loss=0.515001 | time=13.2s
+2026-03-19 18:31:10,105 | INFO | Epoch  16/20 | loss=0.500563 | time=12.1s
+2026-03-19 18:31:22,247 | INFO | Epoch  17/20 | loss=0.487854 | time=12.1s
+2026-03-19 18:31:34,401 | INFO | Epoch  18/20 | loss=0.476111 | time=12.2s
+2026-03-19 18:31:46,539 | INFO | Epoch  19/20 | loss=0.465692 | time=12.1s
+2026-03-19 18:31:58,699 | INFO | Epoch  20/20 | loss=0.456364 | time=12.2s
+2026-03-19 18:31:58,700 | INFO | Training complete in 246.1s
+2026-03-19 18:31:58,702 | INFO | Saved embeddings → train_logs/MF/2010-01-01_2010-06-30_20260319_182736_bpr_dim64
+2026-03-19 18:31:58,801 | INFO | Loss curve saved → train_logs/MF/2010-01-01_2010-06-30_20260319_182736_bpr_dim64/loss_curve.png
+2026-03-19 18:31:58,801 | INFO | Training run saved → train_logs/MF/2010-01-01_2010-06-30_20260319_182736_bpr_dim64
+2026-03-19 18:31:58,801 | INFO | ============================================================
+2026-03-19 18:31:58,801 | INFO | Starting multi-month evaluation ...
+2026-03-19 18:31:58,801 | INFO | ============================================================
+2026-03-19 18:31:58,967 | INFO | 
+Eval window 1: 2010-06-30 → 2010-07-30
+2026-03-19 18:31:59,882 | INFO |   Saved 53,850 recommendation rows → recs_window_01.csv
+2026-03-19 18:31:59,971 | INFO |   Window 1 | min_ratings=10 | K= 5 | Recall@5=0.1175 | NDCG@5=0.1174 | users=228
+2026-03-19 18:32:00,033 | INFO |   Window 1 | min_ratings=10 | K=10 | Recall@10=0.1101 | NDCG@10=0.1120 | users=228
+2026-03-19 18:32:00,097 | INFO |   Window 1 | min_ratings=10 | K=20 | Recall@20=0.1132 | NDCG@20=0.1113 | users=228
+2026-03-19 18:32:00,125 | INFO | 
+Eval window 2: 2010-07-30 → 2010-08-30
+2026-03-19 18:32:01,034 | INFO |   Saved 51,800 recommendation rows → recs_window_02.csv
+2026-03-19 18:32:01,120 | INFO |   Window 2 | min_ratings=10 | K= 5 | Recall@5=0.0765 | NDCG@5=0.0755 | users=230
+2026-03-19 18:32:01,183 | INFO |   Window 2 | min_ratings=10 | K=10 | Recall@10=0.0670 | NDCG@10=0.0691 | users=230
+2026-03-19 18:32:01,247 | INFO |   Window 2 | min_ratings=10 | K=20 | Recall@20=0.0820 | NDCG@20=0.0764 | users=230
+2026-03-19 18:32:01,341 | INFO | 
+Eval window 3: 2010-08-30 → 2010-09-30
+2026-03-19 18:32:02,211 | INFO |   Saved 48,650 recommendation rows → recs_window_03.csv
+2026-03-19 18:32:02,279 | INFO |   Window 3 | min_ratings=10 | K= 5 | Recall@5=0.0910 | NDCG@5=0.0932 | users=167
+2026-03-19 18:32:02,325 | INFO |   Window 3 | min_ratings=10 | K=10 | Recall@10=0.0838 | NDCG@10=0.0877 | users=167
+2026-03-19 18:32:02,372 | INFO |   Window 3 | min_ratings=10 | K=20 | Recall@20=0.0862 | NDCG@20=0.0868 | users=167
+2026-03-19 18:32:02,397 | INFO | 
+Eval window 4: 2010-09-30 → 2010-10-30
+2026-03-19 18:32:03,147 | INFO |   Saved 42,300 recommendation rows → recs_window_04.csv
+2026-03-19 18:32:03,208 | INFO |   Window 4 | min_ratings=10 | K= 5 | Recall@5=0.0940 | NDCG@5=0.0920 | users=151
+2026-03-19 18:32:03,250 | INFO |   Window 4 | min_ratings=10 | K=10 | Recall@10=0.0815 | NDCG@10=0.0841 | users=151
+2026-03-19 18:32:03,292 | INFO |   Window 4 | min_ratings=10 | K=20 | Recall@20=0.0816 | NDCG@20=0.0827 | users=151
+2026-03-19 18:32:03,314 | INFO | 
+Eval window 5: 2010-10-30 → 2010-11-30
+2026-03-19 18:32:04,053 | INFO |   Saved 42,050 recommendation rows → recs_window_05.csv
+2026-03-19 18:32:04,103 | INFO |   Window 5 | min_ratings=10 | K= 5 | Recall@5=0.0829 | NDCG@5=0.0894 | users=111
+2026-03-19 18:32:04,134 | INFO |   Window 5 | min_ratings=10 | K=10 | Recall@10=0.0829 | NDCG@10=0.0869 | users=111
+2026-03-19 18:32:04,165 | INFO |   Window 5 | min_ratings=10 | K=20 | Recall@20=0.0860 | NDCG@20=0.0859 | users=111
+2026-03-19 18:32:04,187 | INFO | 
+Eval summary saved → train_logs/MF/2010-01-01_2010-06-30_20260319_182736_bpr_dim64/eval_summary.csv
+2026-03-19 18:32:04,280 | INFO | Plot saved → train_logs/MF/2010-01-01_2010-06-30_20260319_182736_bpr_dim64/recall_over_time.png
+2026-03-19 18:32:04,367 | INFO | Plot saved → train_logs/MF/2010-01-01_2010-06-30_20260319_182736_bpr_dim64/ndcg_over_time.png
+2026-03-19 18:32:04,367 | INFO | 
+All done. Everything saved in: train_logs/MF/2010-01-01_2010-06-30_20260319_182736_bpr_dim64

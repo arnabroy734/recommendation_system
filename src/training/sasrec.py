@@ -19,7 +19,7 @@ from tqdm import tqdm
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from src.data.db_simulator import MovieLensDB
 from src.training.matrix_factorisation import Encoder
-from src.training.sasrec_architecture import SASRec
+from src.training.sasrec_architecture import SASRec, SASRecWithGenre
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -68,57 +68,58 @@ def load_training_data(
 
 
 class SASRecDataset(Dataset):
-    def __init__(self, df, enc, max_len=200, n_neg=4):
-        self.max_len = max_len
-        self.n_neg   = n_neg
-        self.enc     = enc
+    def __init__(self, df, enc, db, max_len=200, n_neg=4, use_genre=False):
+        self.max_len   = max_len
+        self.n_neg     = n_neg
+        self.enc       = enc
+        self.use_genre = use_genre
+        self.db        = db            # needed for genre lookup
 
         df = df.sort_values(["userId", "timestamp"])
 
-        self.sequences  = []   # (u_idx, seq, targets) per user
-        self.all_items  = np.array(list(enc.id_item.keys()))
+        self.sequences = []            # (u_idx, seq, targets, orig_movie_ids_padded)
+        self.all_items = np.array(list(enc.id_item.keys()))
 
-        # build per-user positive set for negative exclusion
         self.user_pos = {}
         for uid, grp in df.groupby("userId"):
             u = enc.user_id[uid]
             self.user_pos[u] = set(enc.item_id[m] for m in grp["movieId"].values)
 
         for uid, grp in df.groupby("userId"):
-            u     = enc.user_id[uid]
-            items = [enc.item_id[i] + 1 for i in grp["movieId"].values]
+            u        = enc.user_id[uid]
+            items    = [enc.item_id[i] + 1 for i in grp["movieId"].values]
+            # keep original movieIds (for genre lookup) aligned with items
+            orig_ids = list(grp["movieId"].values)
 
             if len(items) < 2:
                 continue
 
-            # full sequence truncated to max_len + 1
-            # input  = items[:-1]  (all but last)
-            # target = items[1:]   (all but first)
-            full = items[-(max_len + 1):]
-            seq     = full[:-1]   # input sequence
-            targets = full[1:]    # target at every position
+            full         = items[-(max_len + 1):]
+            full_orig    = orig_ids[-(max_len + 1):]
 
-            # left pad input to max_len
-            pad_len = max_len - len(seq)
-            seq     = [0] * pad_len + seq
+            seq          = full[:-1]
+            targets      = full[1:]
+            seq_orig     = full_orig[:-1]   # original movieIds for the input seq
 
-            # left pad targets with -1 (ignored in loss)
-            targets = [-1] * pad_len + targets
+            pad_len      = max_len - len(seq)
+            seq          = [0] * pad_len + seq
+            targets      = [-1] * pad_len + targets
+            seq_orig     = [0] * pad_len + seq_orig   # 0 → zero genre vector in db
 
-            self.sequences.append((u, seq, targets))
+            self.sequences.append((u, seq, targets, seq_orig))
 
     def __len__(self):
         return len(self.sequences)
 
     def __getitem__(self, idx):
-        u, seq, targets = self.sequences[idx]
+        u, seq, targets, seq_orig = self.sequences[idx]
 
-        # sample one negative per target position
-        pos_set  = self.user_pos.get(u, set())
+        # negative sampling (unchanged)
+        pos_set = self.user_pos.get(u, set())
         negs = []
         for t in targets:
             if t == -1:
-                negs.append([-1] * self.n_neg)   # masked positions
+                negs.append([-1] * self.n_neg)
                 continue
             pos_negs = []
             while len(pos_negs) < self.n_neg:
@@ -127,12 +128,22 @@ class SASRecDataset(Dataset):
                     pos_negs.append(j + 1)
             negs.append(pos_negs)
 
+        if self.use_genre:
+            # genre vectors for each position in the input sequence
+            # seq_orig has 0 for padded positions → db returns zero vector
+            genre_vecs = self.db.get_genre_vectors_batch(seq_orig)  # (L, 12)
+            return (
+                torch.LongTensor(seq),
+                torch.LongTensor(targets),
+                torch.LongTensor(negs),
+                torch.FloatTensor(genre_vecs),   # (L, 12)
+            )
+
         return (
             torch.LongTensor(seq),
             torch.LongTensor(targets),
-            torch.LongTensor(negs),   # (L, n_neg)
+            torch.LongTensor(negs),
         )
-
 
 
 # =========================================================
@@ -144,71 +155,60 @@ def lr_lambda(step):
         return step / warmup_steps
     return 1.0
 
-
-def train_one_epoch(model, loader, optimizer, scheduler, device, loss_name):
+def train_one_epoch(model, loader, optimizer, scheduler, device, loss_name, use_genre=False):
     model.train()
     total_loss = 0.0
 
-    for seq, targets, negs in tqdm(loader):
-        seq     = seq.to(device)       # (B, L)
-        targets = targets.to(device)   # (B, L)
-        negs    = negs.to(device)      # (B, L)
+    for batch in tqdm(loader):
+        if use_genre:
+            seq, targets, negs, genre_seq = batch
+            genre_seq = genre_seq.to(device)   # (B, L, 12)
+        else:
+            seq, targets, negs = batch
+
+        seq     = seq.to(device)
+        targets = targets.to(device)
+        negs    = negs.to(device)
 
         # ── forward ───────────────────────────────────────────────────
-        h, _ = model(seq)   # (B, L, dim)
+        if use_genre:
+            h, _ = model(seq, genre_seq)   # SASRecWithGenre
+        else:
+            h, _ = model(seq)              # SASRec
 
-        # ── mask — ignore padded positions (target == -1) ─────────────
-        mask = (targets != -1)   # (B, L) boolean
+        # ── mask + scoring (unchanged from original) ──────────────────
+        mask         = (targets != -1)
+        safe_targets = targets.clamp(min=0)
+        pos_emb      = model.item_emb(safe_targets)
+        pos_logits   = (h * pos_emb).sum(dim=-1)
 
-        # ── positive scores ───────────────────────────────────────────
-        # only lookup valid target positions — replace -1 with 0 for embedding safety
-        safe_targets  = targets.clamp(min=0)              # (B, L)
-        pos_emb       = model.item_emb(safe_targets)      # (B, L, dim)
-        pos_logits    = (h * pos_emb).sum(dim=-1)         # (B, L)
+        safe_negs  = negs.clamp(min=0)
+        neg_emb    = model.item_emb(safe_negs)
+        neg_logits = (h.unsqueeze(2) * neg_emb).sum(dim=-1)
 
-        safe_negs  = negs.clamp(min=0)                        # (B, L, n_neg)
-        neg_emb    = model.item_emb(safe_negs)                 # (B, L, n_neg, dim)
-        neg_logits = (h.unsqueeze(2) * neg_emb).sum(dim=-1)   # (B, L, n_neg)
-
-        if loss_name == "bce": 
+        if loss_name == "bce":
             pos_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-                pos_logits,
-                torch.ones_like(pos_logits),
-                reduction="none"
-            )  # (B, L)
-
+                pos_logits, torch.ones_like(pos_logits), reduction="none"
+            )
             neg_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-                neg_logits,
-                torch.zeros_like(neg_logits),
-                reduction="none"
-            )  # (B, L, n_neg)
+                neg_logits, torch.zeros_like(neg_logits), reduction="none"
+            ).mean(dim=-1)
+            loss = ((pos_loss + neg_loss) * mask).sum() / mask.sum()
 
-            # average neg loss across n_neg dimension first
-            neg_loss = neg_loss.mean(dim=-1)   # (B, L)
-
-            # combine and mask
-            loss = pos_loss + neg_loss         # (B, L)
-            loss = (loss * mask).sum() / mask.sum()   # scalar
-        
         elif loss_name == "bpr":
-            # BPR: pos vs each negative
-            diff = pos_logits.unsqueeze(2) - neg_logits            # (B, L, n_neg)
-            loss = -torch.log(torch.sigmoid(diff) + 1e-10)         # (B, L, n_neg)
-
-            # mask padded positions — expand mask to cover n_neg dim
-            mask_expanded = mask.unsqueeze(2).expand_as(loss)      # (B, L, n_neg)
+            diff = pos_logits.unsqueeze(2) - neg_logits
+            loss = -torch.log(torch.sigmoid(diff) + 1e-10)
+            mask_expanded = mask.unsqueeze(2).expand_as(loss)
             loss = (loss * mask_expanded).sum() / mask_expanded.sum()
-        
-        # ── update ────────────────────────────────────────────────────
+
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         scheduler.step()
         total_loss += loss.item()
-    
-    return total_loss / len(loader)
 
+    return total_loss / len(loader)
 
 # =========================================================
 # Evaluation (same logic as MF)
@@ -258,13 +258,22 @@ def evaluate(model, enc, train_df, db, args, log_dir, device):
                 continue
 
             # build sequence
-            hist  = train_df[train_df["userId"] == uid_orig].sort_values("timestamp")
-            items = [enc.item_id[i] + 1 for i in hist["movieId"].values][-args.max_len:]
-            seq   = [0] * (args.max_len - len(items)) + items
-            seq   = torch.LongTensor(seq).unsqueeze(0).to(device)
+            # ── build sequence ─────────────────────────────────────────
+            hist     = train_df[train_df["userId"] == uid_orig].sort_values("timestamp")
+            orig_ids = list(hist["movieId"].values)[-args.max_len:]
+            items    = [enc.item_id[i] + 1 for i in orig_ids]
+            pad_len  = args.max_len - len(items)
+            seq      = [0] * pad_len + items
+            seq_t    = torch.LongTensor(seq).unsqueeze(0).to(device)
 
             with torch.no_grad():
-                h = model(seq)[0].cpu().numpy()[0][-1]  # (dim,)
+                if args.use_genre:
+                    seq_orig_padded = [0] * pad_len + orig_ids
+                    genre_vecs = db.get_genre_vectors_batch(seq_orig_padded)   # (L, 12)
+                    genre_t    = torch.FloatTensor(genre_vecs).unsqueeze(0).to(device)
+                    h = model(seq_t, genre_t)[0].cpu().numpy()[0][-1]          # (dim,)
+                else:
+                    h = model(seq_t)[0].cpu().numpy()[0][-1]                   # (dim,)
 
             # score unseen items — shift indices by 1 for embedding lookup
             emb_w       = model.item_emb.weight.detach().cpu().numpy()
@@ -435,6 +444,11 @@ def main():
     p.add_argument("--n_heads", type=int, default=2)
     p.add_argument("--n_layers", type=int, default=2)
     p.add_argument("--loss", type=str, choices=["bce", "bpr"], default="bce")
+    # ── genre args ─────────────────────────────────────────────
+    p.add_argument("--use_genre",  action="store_true",
+                help="Use SASRecWithGenre with genre embedding fusion")
+    p.add_argument("--n_genres",   type=int, default=12,
+                help="Genre vocabulary size (must match GENRE_VOCAB in db_simulator)")
 
 
     args = p.parse_args()
@@ -443,7 +457,9 @@ def main():
     logger.info(f"Using device: {device}")
 
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = Path(args.log_root) / f"{args.start}_{args.end}_{run_tag}_{args.loss}_dim{args.dim}"
+    genre_tag = "_genre" if args.use_genre else ""
+    log_dir   = Path(args.log_root) / \
+            f"{args.start}_{args.end}_{run_tag}_{args.loss}_dim{args.dim}{genre_tag}"
     log_dir.mkdir(parents=True, exist_ok=True)
 
     db = MovieLensDB(data_dir=args.data_dir)
@@ -459,21 +475,39 @@ def main():
     enc = Encoder()
     enc.encode(train_df)
     
-
-    dataset = SASRecDataset(train_df, enc, args.max_len, args.n_neg)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+    # dataset — pass db and use_genre flag
+    dataset = SASRecDataset(train_df, enc, db, args.max_len, args.n_neg,
+                            use_genre=args.use_genre)
+    loader  = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
+                        num_workers=4, pin_memory=True)
 
     assert args.dim % args.n_heads == 0, \
-    f"dim ({args.dim}) must be divisible by n_heads ({args.n_heads})"
+        f"dim ({args.dim}) must be divisible by n_heads ({args.n_heads})"
 
-    model = SASRec(enc.n_items, args.dim, args.max_len,
-               n_heads=args.n_heads, n_layers=args.n_layers).to(device)
+    # model — pick class based on flag
+    if args.use_genre:
+        logger.info("Using SASRecWithGenre (genre embedding fusion enabled)")
+        model = SASRecWithGenre(
+            enc.n_items, args.dim, args.max_len,
+            n_genres=args.n_genres,
+            n_heads=args.n_heads,
+            n_layers=args.n_layers,
+        ).to(device)
+    else:
+        logger.info("Using base SASRec")
+        model = SASRec(
+            enc.n_items, args.dim, args.max_len,
+            n_heads=args.n_heads,
+            n_layers=args.n_layers,
+        ).to(device)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    
 
     losses = []
     for epoch in range(1, args.epochs+1):
-        loss = train_one_epoch(model, loader, optimizer, scheduler, device, args.loss)
+        loss = train_one_epoch(model, loader, optimizer, scheduler, device, args.loss, use_genre=args.use_genre)
         losses.append(loss)
         logger.info(f"Epoch {epoch}: loss={loss:.4f}")
     

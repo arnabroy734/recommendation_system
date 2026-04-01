@@ -2,9 +2,13 @@ data/*/*.txt
 data/*/*.csv
 deleted
 data
-train_logs/MF
+# train_logs/MF
 train_logs/MF_temporal
-train_logs/SASREC
+# train_logs/SASREC
 explore.ipynb
+*.csv
+*.pkl
+*.npy
+*.pt
 
 

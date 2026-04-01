@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -195,3 +196,120 @@ class SASRec(nn.Module):
         h, attn_scores = self.encoder(x, pad_mask)   # (B, L, dim)
 
         return h, attn_scores
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SASRecWithGenre
+# Extends SASRec by fusing a learned genre projection into item representations
+# before the transformer encoder. Everything else (attention, FF, eval) is
+# identical to the base SASRec class.
+#
+# Item representation at position t:
+#   x_t = ItemEmb(item_t) + PosEmb(t) + GenreProjection(genre_vec_t)
+#
+# genre_seq : (B, L, n_genres) — float32 one-hot vectors from db.get_genre_vectors_batch()
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SASRecWithGenre(nn.Module):
+    def __init__(
+        self,
+        n_items:    int,
+        dim:        int,
+        max_len:    int,
+        n_genres:   int   = 12,
+        n_heads:    int   = 2,
+        n_layers:   int   = 2,
+        ff_dim:     int   = None,
+        dropout:    float = 0.2,
+    ):
+        """
+        Args:
+            n_items   : total number of items (excluding padding index 0)
+            dim       : embedding / model dimension
+            max_len   : maximum sequence length
+            n_genres  : size of genre vocabulary (default 12, matches GENRE_VOCAB)
+            n_heads   : number of attention heads
+            n_layers  : number of transformer encoder layers
+            ff_dim    : feedforward inner dim (defaults to 2 * dim if None)
+            dropout   : dropout probability
+        """
+        super().__init__()
+
+        # ── item and positional embeddings (same as base SASRec) ──────
+        self.item_emb = nn.Embedding(n_items + 1, dim, padding_idx=0)
+        self.pos_emb  = nn.Embedding(max_len, dim)
+
+        # ── genre projection: n_genres → dim ─────────────────────────
+        # Linear with no bias — genre vector is a bag-of-genres signal,
+        # bias would shift all items uniformly which adds nothing.
+        self.genre_proj = nn.Linear(n_genres, dim, bias=False)
+
+        # ── layer norm applied AFTER fusion, BEFORE encoder ──────────
+        # Stabilises training when genre signal scale differs from item emb scale.
+        self.input_norm = nn.LayerNorm(dim)
+
+        self.dropout  = nn.Dropout(dropout)
+        self.encoder  = TransformerEncoder(dim, n_heads, n_layers, ff_dim, dropout)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.normal_(self.item_emb.weight, mean=0, std=0.01)
+        nn.init.normal_(self.pos_emb.weight,  mean=0, std=0.01)
+        # Xavier uniform for the projection layer — standard for linear layers
+        nn.init.xavier_uniform_(self.genre_proj.weight)
+
+    def forward(self, seq, genre_seq):
+        """
+        Args:
+            seq       : (B, L)          — item indices, 0 = padding
+            genre_seq : (B, L, n_genres) — float32 one-hot genre vectors
+
+        Returns:
+            h           : (B, L, dim)              — contextual representations
+            attn_scores : list of (B, n_heads, L, L) — one per encoder layer
+        """
+        B, L = seq.shape
+
+        # ── pad mask — True where seq == 0 ───────────────────────────
+        pad_mask = (seq == 0)   # (B, L)
+
+        # ── item + positional embeddings ─────────────────────────────
+        pos       = torch.arange(L, device=seq.device).unsqueeze(0).expand(B, L)
+        item_repr = self.item_emb(seq) + self.pos_emb(pos)    # (B, L, dim)
+
+        # ── genre projection ─────────────────────────────────────────
+        # genre_seq is float32 one-hot: (B, L, n_genres) → (B, L, dim)
+        genre_repr = self.genre_proj(genre_seq.to(seq.device)) # (B, L, dim)
+
+        # ── fuse: add genre signal to item representation ─────────────
+        x = item_repr + genre_repr                             # (B, L, dim)
+
+        # ── layer norm after fusion ───────────────────────────────────
+        x = self.input_norm(x)
+
+        # ── zero out pad positions explicitly ────────────────────────
+        x = x.masked_fill(pad_mask.unsqueeze(-1), 0.0)
+        x = self.dropout(x)
+
+        # ── transformer encoder ───────────────────────────────────────
+        h, attn_scores = self.encoder(x, pad_mask)             # (B, L, dim)
+
+        return h, attn_scores
+
+    def init_item_embeddings_from_mf(self, mf_Q: np.ndarray):
+        """
+        Warm-start item embeddings from trained MF item embedding matrix.
+
+        Args:
+            mf_Q : np.ndarray of shape (n_items, dim)
+                   MFModel.Q — matrix-indexed, NOT original movieId-indexed.
+                   Row i corresponds to enc.id_item[i].
+
+        NOTE: padding index 0 is left as zeros (unchanged).
+              mf_Q rows map to embedding indices 1..n_items (shift by +1).
+        """
+        import torch
+        weight = torch.tensor(mf_Q, dtype=torch.float32)   # (n_items, dim)
+        with torch.no_grad():
+            self.item_emb.weight[1:].copy_(weight)

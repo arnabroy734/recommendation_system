@@ -1,0 +1,82 @@
+2026-04-01 23:14:20,796 | WARNING | [MF] Multiple runs match — using most recent: 2018-01-01_2018-06-30_20260401_211517_bpr_dim64
+2026-04-01 23:14:20,796 | INFO | [MF] Run dir: train_logs/MF/2018-01-01_2018-06-30_20260401_211517_bpr_dim64
+2026-04-01 23:14:20,796 | WARNING | [SASREC] Multiple runs match — using most recent: 2018-01-01_2018-06-30_20260401_210855_bpr_dim64
+2026-04-01 23:14:20,796 | INFO | [SASREC] Run dir: train_logs/SASREC/2018-01-01_2018-06-30_20260401_210855_bpr_dim64
+2026-04-01 23:14:20,796 | INFO | Loading MF recs ...
+2026-04-01 23:14:21,079 | INFO |   Loaded recs_window_01.csv: 1,532 users | 766,000 rows (top_n=500)
+2026-04-01 23:14:21,309 | INFO |   Loaded recs_window_02.csv: 1,390 users | 695,000 rows (top_n=500)
+2026-04-01 23:14:21,509 | INFO |   Loaded recs_window_03.csv: 1,258 users | 629,000 rows (top_n=500)
+2026-04-01 23:14:21,689 | INFO |   Loaded recs_window_04.csv: 1,145 users | 572,500 rows (top_n=500)
+2026-04-01 23:14:21,882 | INFO |   Loaded recs_window_05.csv: 1,164 users | 582,000 rows (top_n=500)
+2026-04-01 23:14:21,882 | INFO | Loading SASRec model ...
+2026-04-01 23:14:22,282 | INFO | SASRec loaded | dim=64 | layers=2 | max_len=300 | n_items=4,892
+2026-04-01 23:14:22,282 | INFO | Building training sequences ...
+2026-04-01 23:14:22,659 | INFO | Training sequences built for 6,245 users
+2026-04-01 23:14:22,659 | INFO | ============================================================
+2026-04-01 23:14:22,659 | INFO | EVAL 1 — Batch NDCG / Recall
+2026-04-01 23:14:22,660 | INFO | ============================================================
+2026-04-01 23:14:22,660 | INFO | 
+Window 1: 2018-06-30 → 2018-07-30
+2026-04-01 23:14:22,674 | INFO |   After n_eval_ratings >= 10 filter: 376 users
+2026-04-01 23:14:22,806 | INFO |   Users with recs AND ground truth: 376
+2026-04-01 23:14:24,284 | INFO |   Skipped users (no seq / no candidates): 0
+2026-04-01 23:14:24,285 | INFO |   K= 5 | Recall=0.1112 | NDCG=0.1184 | users=376
+2026-04-01 23:14:24,285 | INFO |   K=10 | Recall=0.1053 | NDCG=0.1121 | users=376
+2026-04-01 23:14:24,285 | INFO | 
+Window 2: 2018-07-30 → 2018-08-30
+2026-04-01 23:14:24,301 | INFO |   After n_eval_ratings >= 10 filter: 288 users
+2026-04-01 23:14:24,434 | INFO |   Users with recs AND ground truth: 288
+2026-04-01 23:14:25,316 | INFO |   Skipped users (no seq / no candidates): 0
+2026-04-01 23:14:25,316 | INFO |   K= 5 | Recall=0.1076 | NDCG=0.1127 | users=288
+2026-04-01 23:14:25,316 | INFO |   K=10 | Recall=0.0938 | NDCG=0.1015 | users=288
+2026-04-01 23:14:25,317 | INFO | 
+Window 3: 2018-08-30 → 2018-09-30
+2026-04-01 23:14:25,328 | INFO |   After n_eval_ratings >= 10 filter: 237 users
+2026-04-01 23:14:25,456 | INFO |   Users with recs AND ground truth: 237
+2026-04-01 23:14:26,152 | INFO |   Skipped users (no seq / no candidates): 0
+2026-04-01 23:14:26,153 | INFO |   K= 5 | Recall=0.0734 | NDCG=0.0679 | users=237
+2026-04-01 23:14:26,153 | INFO |   K=10 | Recall=0.0688 | NDCG=0.0666 | users=237
+2026-04-01 23:14:26,153 | INFO | 
+Window 4: 2018-09-30 → 2018-10-30
+2026-04-01 23:14:26,163 | INFO |   After n_eval_ratings >= 10 filter: 171 users
+2026-04-01 23:14:26,292 | INFO |   Users with recs AND ground truth: 171
+2026-04-01 23:14:26,818 | INFO |   Skipped users (no seq / no candidates): 0
+2026-04-01 23:14:26,818 | INFO |   K= 5 | Recall=0.0830 | NDCG=0.0852 | users=171
+2026-04-01 23:14:26,818 | INFO |   K=10 | Recall=0.0696 | NDCG=0.0751 | users=171
+2026-04-01 23:14:26,818 | INFO | 
+Window 5: 2018-10-30 → 2018-11-30
+2026-04-01 23:14:26,831 | INFO |   After n_eval_ratings >= 10 filter: 209 users
+2026-04-01 23:14:26,961 | INFO |   Users with recs AND ground truth: 209
+2026-04-01 23:14:27,599 | INFO |   Skipped users (no seq / no candidates): 0
+2026-04-01 23:14:27,599 | INFO |   K= 5 | Recall=0.0689 | NDCG=0.0725 | users=209
+2026-04-01 23:14:27,599 | INFO |   K=10 | Recall=0.0579 | NDCG=0.0636 | users=209
+2026-04-01 23:14:27,602 | INFO | 
+Eval 1 summary → eval_results/SASREC_ON_CANDIDATES/2018-01-01_2018-06-30_20260401_231403_top500/eval1_batch_summary.csv
+2026-04-01 23:14:27,778 | INFO | Plot → eval_results/SASREC_ON_CANDIDATES/2018-01-01_2018-06-30_20260401_231403_top500/eval1_recall_over_windows.png
+2026-04-01 23:14:27,873 | INFO | Plot → eval_results/SASREC_ON_CANDIDATES/2018-01-01_2018-06-30_20260401_231403_top500/eval1_ndcg_over_windows.png
+2026-04-01 23:14:27,873 | INFO | ============================================================
+2026-04-01 23:14:27,873 | INFO | EVAL 2 — Sequential Next-Item Prediction (per month)
+2026-04-01 23:14:27,873 | INFO | ============================================================
+2026-04-01 23:14:28,101 | INFO |   Eval2: After n_eval_ratings >= 10 filter: 873 users
+2026-04-01 23:14:28,193 | INFO | 
+Window 1: 2018-06-30 → 2018-07-30
+2026-04-01 23:14:45,791 | INFO |   Predictions: 5,568 | skipped (vocab): 2,552 | skipped (not in pool): 8,919
+2026-04-01 23:14:45,792 | INFO |   HitRate@ 5 | SASRec=0.0648 | Random=0.0093 | Lift=6.94x  (5,568 predictions)
+2026-04-01 23:14:45,792 | INFO |   HitRate@10 | SASRec=0.1239 | Random=0.0172 | Lift=7.19x  (5,568 predictions)
+2026-04-01 23:14:45,792 | INFO | 
+Window 2: 2018-07-30 → 2018-08-30
+2026-04-01 23:14:56,779 | INFO |   Predictions: 3,474 | skipped (vocab): 1,857 | skipped (not in pool): 6,182
+2026-04-01 23:14:56,780 | INFO |   HitRate@ 5 | SASRec=0.0792 | Random=0.0092 | Lift=8.59x  (3,474 predictions)
+2026-04-01 23:14:56,780 | INFO |   HitRate@10 | SASRec=0.1304 | Random=0.0173 | Lift=7.55x  (3,474 predictions)
+2026-04-01 23:14:56,780 | INFO | 
+────────────────────────────────────────
+2026-04-01 23:14:56,780 | INFO | AGGREGATE (windows 1–2)
+2026-04-01 23:14:56,780 | INFO |   Total skipped (vocab):   4,409
+  Total skipped (no pool): 15,101
+2026-04-01 23:14:56,781 | INFO |   HitRate@ 5 | SASRec=0.0703 | Random=0.0093 | Lift=7.57x  (9,042 predictions)
+2026-04-01 23:14:56,781 | INFO |   HitRate@10 | SASRec=0.1264 | Random=0.0173 | Lift=7.33x  (9,042 predictions)
+2026-04-01 23:14:56,788 | INFO | 
+Eval 2 summary → eval_results/SASREC_ON_CANDIDATES/2018-01-01_2018-06-30_20260401_231403_top500/eval2_sequential_summary.csv
+2026-04-01 23:14:56,884 | INFO | Plot → eval_results/SASREC_ON_CANDIDATES/2018-01-01_2018-06-30_20260401_231403_top500/eval2_hitrate_per_month.png
+2026-04-01 23:14:56,884 | INFO | 
+All done → eval_results/SASREC_ON_CANDIDATES/2018-01-01_2018-06-30_20260401_231403_top500
