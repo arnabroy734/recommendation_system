@@ -1,6 +1,0 @@
-target_genre,userId,genre_fraction,total_ratings,genre_count
-Action,147789,0.219,315,69
-Romance,145416,0.3333,261,87
-Sci-Fi,15898,0.2266,128,29
-Thriller,135399,0.2308,208,48
-Horror,19133,0.2246,739,166
