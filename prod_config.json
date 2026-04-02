@@ -1,0 +1,56 @@
+{
+  "mf": {
+    "run_id": "52b31fe21445410bbee0ea92d60760f7",
+    "run_name": "mf_bpr_dim64",
+    "train_end": "2018-06-30",
+    "params": {
+      "start": "2016-06-30",
+      "end": "2018-06-30",
+      "eval_start": "2018-07-01",
+      "eval_end": "2018-07-30",
+      "loss": "bpr",
+      "dim": "64",
+      "epochs": "20",
+      "lr": "0.005",
+      "reg1": "0.01",
+      "reg2": "0.001",
+      "n_neg": "4",
+      "min_rating": "3.0",
+      "min_u_rat": "5",
+      "min_i_rat": "5",
+      "eval_k": "[5, 10, 15, 20, 50, 100]",
+      "min_eval_ratings": "[5]",
+      "top_n_recs": "100"
+    },
+    "promoted_at": "2026-04-03 01:50:51"
+  },
+  "sasrec": {
+    "run_id": "4eb32b70066343b2926ce49aa0c4eba1",
+    "run_name": "sasrec_bpr_dim64",
+    "train_end": "2018-06-30",
+    "params": {
+      "start": "2016-06-30",
+      "end": "2018-06-30",
+      "eval_start": "2018-07-01",
+      "eval_end": "2018-07-30",
+      "loss": "bpr",
+      "dim": "64",
+      "epochs": "30",
+      "lr": "0.001",
+      "max_len": "200",
+      "batch_size": "128",
+      "n_neg": "4",
+      "n_heads": "2",
+      "n_layers": "2",
+      "min_rating": "3.0",
+      "min_u_rat": "5",
+      "min_i_rat": "5",
+      "eval_k": "[5, 10, 15, 20, 50, 100]",
+      "min_eval_ratings": "[5]",
+      "top_n_recs": "100",
+      "use_genre": "False",
+      "n_genres": "12"
+    },
+    "promoted_at": "2026-04-03 01:50:51"
+  }
+}

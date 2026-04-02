@@ -1,7 +1,7 @@
 data/*/*.txt
 data/*/*.csv
 deleted
-data
+data/ml-32m
 # train_logs/MF
 train_logs/MF_temporal
 # train_logs/SASREC

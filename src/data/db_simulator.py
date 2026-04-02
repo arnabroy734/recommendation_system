@@ -347,6 +347,27 @@ class MovieLensDB:
             axis=0
         )
 
+    def get_user_history(
+        self,
+        user_id: int,
+        as_of_date: str,
+        limit: int = 200,
+    ) -> list[dict]:
+        """
+        Fetch a user's interaction history up to as_of_date,
+        ordered by timestamp DESC, limited to `limit` most recent.
+
+        Returns list of dicts: {movie_id, rating, timestamp}
+        """
+        df = self.ratings_df[
+            (self.ratings_df["userId"] == user_id) &
+            (self.ratings_df["timestamp"] <= pd.Timestamp(as_of_date))
+        ].sort_values("timestamp", ascending=False).head(limit)
+
+        return df[["movieId", "rating", "timestamp"]].rename(
+            columns={"movieId": "movie_id"}
+        ).to_dict(orient="records")
+
 # -----------------------------------------------------------------------------
 # Quick sanity check
 # -----------------------------------------------------------------------------
