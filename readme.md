@@ -13,7 +13,9 @@ A two-stage recommendation system built on the [MovieLens 32M](https://grouplens
 - [Experiment Tracking](#experiment-tracking)
 - [Stage 1 — Matrix Factorisation](#stage-1--matrix-factorisation)
 - [Stage 2 — SASRec](#stage-2--sasrec-sequential-recommendation)
-- [Two-Stage Pipeline](#two-stage-pipeline)
+- [Deployment](#deployment)
+- [Serving Pipeline](#serving-pipeline)
+- [Latency Benchmark](#latency-benchmark)
 - [Run Naming Convention](#run-naming-convention)
 
 ***
@@ -43,10 +45,12 @@ Downloads and unzips the dataset into `data/ml-32m/`.
 ```
 recommendation_system/
 ├── data/
-│   └── ml-32m/                          ← MovieLens dataset
+│   ├── ml-32m/                          ← MovieLens dataset
+│   └── candidates.db                    ← Pre-computed MF candidates (SQLite)
 ├── src/
 │   ├── data/
-│   │   └── db_simulator.py              ← MovieLensDB wrapper
+│   │   ├── db_simulator.py              ← MovieLensDB wrapper
+│   │   └── candidates_db.py             ← CandidatesDB read/write abstraction
 │   ├── training/
 │   │   ├── matrix_factorisation.py      ← MF with MSE/BPR loss (SGD)
 │   │   ├── sasrec_architecture.py       ← SASRec + SASRecWithGenre definitions
@@ -54,11 +58,24 @@ recommendation_system/
 │   ├── tracking/
 │   │   ├── tracker.py                   ← ExperimentTracker (MLflow wrapper)
 │   │   └── config.py                    ← Experiment names
-│   └── artifacts/
-│       └── local_store.py               ← LocalArtifactStore
+│   ├── artifacts/
+│   │   └── local_store.py               ← LocalArtifactStore
+│   ├── deploy/
+│   │   ├── promote.py                   ← Promote MLflow runs to prod_config.json
+│   │   └── generate_candidates.py       ← Offline MF candidate generation
+│   ├── serving/
+│   │   ├── utils.py                     ← Artifact loaders + cache helpers
+│   │   └── app.py                       ← FastAPI serving endpoints
+│   └── test/
+│       └── test_latency.py              ← Sequential latency benchmark
+├── results/
+│   ├── training_pipeline.png            ← Training pipeline HLD
+│   └── inference_pipeline.png          ← Inference pipeline HLD
 ├── mlruns/                              ← MLflow artifact store (auto-created, gitignored)
+├── prod_config.json                     ← Active production model versions
 ├── run_mf.sh                            ← Shell script to train MF
 ├── run_sasrec.sh                        ← Shell script to train SASRec
+|── run_app.sh                           ← Shell script to launch serving API
 ├── data_download.sh
 ├── pyproject.toml
 └── README.md
@@ -109,6 +126,10 @@ db.get_genre_vector(movie_id=1)              # np.ndarray (12,)
 
 # Batch genre vectors for a sequence (0 → zero vector for padding)
 db.get_genre_vectors_batch([1, 2, 0, 3])    # np.ndarray (4, 12)
+
+# User interaction history up to a simulation date
+db.get_user_history(user_id=42, as_of_date="2018-07-15", limit=200)
+# → list of {movie_id, rating, timestamp}, ordered most-recent first
 ```
 
 **Genre vocabulary (fixed order, index 0–11):**
@@ -116,6 +137,24 @@ db.get_genre_vectors_batch([1, 2, 0, 3])    # np.ndarray (4, 12)
 Action, Thriller, Sci-Fi, Horror, Romance, Drama,
 Adventure, Documentary, Crime, Comedy, Mystery, Children
 ```
+
+`src/data/candidates_db.py` wraps `data/candidates.db` — the SQLite store for pre-computed MF candidates.
+
+```python
+from src.data.candidates_db import CandidatesDB
+
+with CandidatesDB() as cdb:
+    cdb.user_exists(user_id=42)                        # bool
+    cdb.get_candidates(user_id=42, top_n=500)          # list[dict] — personal candidates
+    cdb.get_global_candidates(top_n=500)               # list[dict] — popularity fallback
+```
+
+**Schema:**
+
+| Table | Columns | Description |
+|---|---|---|
+| `candidates` | `user_id, movie_id, mf_score, rank` | Per-user top-N from MF |
+| `global_candidates` | `movie_id, rank` | Global popular fallback for new/cold-start users |
 
 ***
 
@@ -125,8 +164,8 @@ All training runs are tracked with **MLflow** via `ExperimentTracker`.
 
 ```bash
 # Launch the MLflow UI (separate terminal)
-mlflow ui
-# → http://localhost:5000
+mlflow ui --port 5001
+# → http://localhost:5001
 ```
 
 Each run logs:
@@ -296,23 +335,228 @@ Items not present in the encoder (unseen during training) are skipped.
 
 ***
 
-## Two-Stage Pipeline
+## Deployment
+
+## Training Pipeline
+
+<p align="center">
+  <img src="results/training_pipeline.png" width="850" alt="Training Pipeline HLD"/>
+</p>
+
+Deployment is a two-step manual process: **model promotion** followed by **offline candidate generation**.
+
+### Step 1 — Promote Models to Production
+
+`src/deploy/promote.py` writes the chosen MLflow run IDs into `prod_config.json`, which acts as the single source of truth for which model versions are live.
+
+```bash
+# Promote MF model
+python src/deploy/promote.py --model mf --run_id <mf_run_id>
+
+# Promote SASRec model
+python src/deploy/promote.py --model sasrec --run_id <sasrec_run_id>
+
+# Promote both at once
+python src/deploy/promote.py --model mf --run_id <mf_run_id> \
+                              --model sasrec --run_id <sasrec_run_id>
+
+# Inspect current production config
+python src/deploy/promote.py --show
+```
+
+This creates / updates `prod_config.json`:
+
+```json
+{
+  "mf": {
+    "run_id": "3f2a1bc...",
+    "run_name": "mf_bpr_dim64",
+    "train_end": "2018-06-30",
+    "params": { ... },
+    "promoted_at": "2024-01-15 10:30:00"
+  },
+  "sasrec": {
+    "run_id": "9e1d4fa...",
+    "run_name": "sasrec_bce_dim64",
+    "train_end": "2018-06-30",
+    "params": { ... },
+    "promoted_at": "2024-01-15 10:31:00"
+  }
+}
+```
+
+### Step 2 — Generate Candidates Offline
+
+`src/deploy/generate_candidates.py` reads the promoted MF run from `prod_config.json`, scores all unseen items for every user, and writes the top-N candidates to `data/candidates.db`.
+
+```bash
+# Default top-500 candidates per user
+python src/deploy/generate_candidates.py
+
+# Custom top-N
+python src/deploy/generate_candidates.py --top_n 300
+```
+
+**Scoring formula:**
 
 ```
-Stage 1 — MF Retrieval
-  Scores all items via P_u · Q_i + biases
-  Produces top-N candidates per user
-
-         ↓  top-500 candidate pool
-
-Stage 2 — SASRec Re-ranking
-  Builds user sequence from training history
-  Runs SASRec forward pass → h_u (last hidden state)
-  Scores candidates: h_u · item_emb[i]
-  Re-ranks pool by sequential relevance
+score(u, i) = P[u] · Q[i] + b_i[i]
 ```
 
-> **Known limitation:** MF candidate pool coverage is ~19% for a 6-month training window — 81% of ground truth items are never retrieved by MF. SASRec re-ranking achieves 6–7× lift over random within the pool but is bounded by retrieval coverage. Replacing MF with a broader retriever is the recommended next step.
+User bias `b_u` is excluded — it is a constant per user and does not affect item ranking.
+
+**Cold-start users** (not present in the MF encoder) automatically receive the global top-N popular items from the training window as their candidate pool.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--top_n` | `500` | Top-N candidates per user |
+| `--batch_size` | `1000` | Users per SQLite insert batch |
+
+***
+
+## Serving Pipeline
+<p align="center">
+  <img src="results/inference_pipeline.png" width="850" alt="Inference Pipeline HLD"/>
+</p>
+
+The serving layer is a **FastAPI** application (`src/serving/app.py`) backed by two artifact stores and a two-level in-memory cache.
+
+### Start the Server
+
+```bash
+# GPU inference, cache ON (default)
+export SASREC_RUN_ID=<sasrec_run_id>
+./scripts/serve.sh
+
+# Force CPU
+./scripts/serve.sh --cpu
+
+# Custom port
+./scripts/serve.sh --port 8001
+
+# Disable cache (for benchmarking)
+CACHE_ENABLED=0 ./scripts/serve.sh
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `SASREC_RUN_ID` | required | MLflow run ID for the SASRec model |
+| `CANDIDATES_DB` | `data/candidates.db` | Path to the candidates SQLite DB |
+| `FORCE_CPU` | `0` | Set to `1` to disable CUDA |
+| `CACHE_ENABLED` | `1` | Set to `0` to disable both cache levels |
+| `CANDIDATE_CACHE_SIZE` | `5000` | Max entries in L2 candidate cache |
+| `CANDIDATE_CACHE_TTL` | `3600` | L2 TTL in seconds |
+| `OUTPUT_CACHE_SIZE` | `10000` | Max entries in L1 output cache |
+| `OUTPUT_CACHE_TTL` | `600` | L1 TTL in seconds |
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Server status + active device |
+| `GET` | `/recommendations/{user_id}` | Top-N recommendations for a user |
+| `GET` | `/next-item/{user_id}` | Single most likely next item |
+| `GET` | `/cache/stats` | L1 / L2 hit-miss counters and hit rate % |
+| `GET` | `/cache/clear` | Reset both caches (use between benchmark runs) |
+
+**Query parameters for `/recommendations` and `/next-item`:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `as_of_date` | today | Simulation date `YYYY-MM-DD` — history is built up to this date |
+| `top_n` | `10` | Number of results to return |
+
+**Example request:**
+```bash
+curl "http://localhost:8000/recommendations/42?as_of_date=2018-07-15&top_n=10"
+```
+
+**Example response:**
+```json
+{
+  "user_id": 42,
+  "as_of_date": "2018-07-15",
+  "cached": false,
+  "latency_ms": 63.4,
+  "results": [
+    {"movie_id": 318, "sasrec_score": 4.821, "rank": 1},
+    {"movie_id": 296, "sasrec_score": 4.710, "rank": 2}
+  ]
+}
+```
+
+### Request Pipeline
+
+```
+Request (user_id, as_of_date, top_n)
+        │
+        ├─ L1 hit  (key: user_id + as_of_date + top_n)  →  return immediately
+        │
+        └─ L1 miss
+              │
+              ├─ L2 hit  (key: user_id)  →  skip DB, go straight to SASRec
+              │
+              └─ L2 miss  →  CandidatesDB read  →  store in L2
+                                    │
+                                    ▼
+                         build user sequence from MovieLensDB
+                         (chronological, truncated to max_seq_len)
+                                    │
+                                    ▼
+                         SASRec forward pass
+                         score(u, i) = h_u[-1] · item_emb[i]
+                                    │
+                                    ▼
+                         store in L1  →  return top-N
+```
+
+**Cold-start users** (not in `candidates.db`) are served the global popular fallback, cached under a shared sentinel key `__global_popular__` so all new users share one L2 entry rather than each occupying a slot.
+
+***
+
+## Latency Benchmark
+
+`src/test/test_latency.py` replays a full month of interactions as a sequential request stream against the live server and measures per-request latency.
+
+### Methodology
+
+- Takes a month (e.g. `2018-07`) and filters all interactions within that window
+- Builds a **globally chronological** request list: `(user_id, as_of_date)` sorted by actual interaction timestamp — each request receives only the history the user had up to that moment
+- Fires all requests sequentially against `GET /recommendations/{user_id}`
+- Reports **P50, P95, P99** and mean latency using server-reported `latency_ms` (excludes network overhead)
+- Results are appended to `results/latency_benchmark_{month}.csv` so all conditions accumulate in one file
+
+```bash
+# Run benchmark (server must be running separately)
+python src/test/test_latency.py --month 2018-07 --top_n 10
+
+# Custom server port
+python src/test/test_latency.py --month 2018-07 --base_url http://localhost:8001
+```
+
+Run once per condition by restarting the server with different env vars:
+
+```bash
+FORCE_CPU=0 CACHE_ENABLED=1 ./scripts/serve.sh   # GPU  + cache ON
+FORCE_CPU=0 CACHE_ENABLED=0 ./scripts/serve.sh   # GPU  + cache OFF
+FORCE_CPU=1 CACHE_ENABLED=1 ./scripts/serve.sh   # CPU  + cache ON
+FORCE_CPU=1 CACHE_ENABLED=0 ./scripts/serve.sh   # CPU  + cache OFF
+```
+
+### Results — July 2018 (112,659 requests, top_n=10)
+
+| Condition | Requests | P50 (ms) | P95 (ms) | P99 (ms) | Mean (ms) | L1 Hit % | L2 Hit % |
+|---|---|---|---|---|---|---|---|
+| CPU \| cache=OFF | 112,659 | 65.437 | 68.508 | 69.342 | 65.008 | 0.0% | 0.0% |
+| CPU \| cache=ON | 112,659 | 0.006 | 67.416 | 104.203 | 5.738 | 92.6% | 74.0% |
+
+**Key observations:**
+
+- **Cache OFF**: Every request hits the full pipeline (DB → SASRec inference). Tight P50→P99 spread of ~4ms reflects consistent CPU inference time at ~65ms per request.
+- **Cache ON**: 92.6% of requests are L1 hits — served in **0.006ms** (pure dict lookup). The chronological replay means the same `(user_id, as_of_date)` key recurs naturally, resulting in a high hit rate. Mean latency drops from 65ms to 5.7ms.
+- **P99 increase with cache ON** (104ms vs 69ms): The ~1% of cold L1+L2 misses pay a one-time overhead for both DB read and cache write on top of SASRec inference. This is a first-access tax, not a recurring cost — async cache writes can eliminate it if needed.
 
 ***
 
