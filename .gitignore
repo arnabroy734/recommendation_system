@@ -10,5 +10,7 @@ explore.ipynb
 *.pkl
 *.npy
 *.pt
-
+*.db
+recommendation_system.egg-info
+mlruns
 
