@@ -1,6 +1,5 @@
 # Movie Recommendation System
-
-A two-stage recommendation system built on the [MovieLens 32M](https://grouplens.org/datasets/movielens/) dataset, combining **Matrix Factorisation** (retrieval) and **SASRec** (sequential re-ranking). Experiments are tracked with **MLflow**.
+This project builds a production-grade movie recommendation system on the MovieLens 32M dataset (~32M ratings, ~200K users, ~87K movies). Stage 1 uses Matrix Factorisation (BPR/MSE, SGD) to retrieve a personalised candidate pool offline. Stage 2 uses SASRec — a self-attentive sequential model — to re-rank candidates at serve time using the user's real interaction history. The full system ships with an MLflow experiment tracker, a manual model promotion workflow, SQLite-backed offline candidate storage, a FastAPI inference server, and a two-level TTL cache (L1: output cache, L2: candidate cache) that cuts mean latency from 65ms → 5.7ms at 92.6% L1 hit rate.
 
 ***
 
