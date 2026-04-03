@@ -573,3 +573,10 @@ sasrec_bpr_dim64_genre
 ```
 
 When multiple runs exist for the same config, the MLflow UI sorts by start time — the most recent run is at the top.
+
+
+![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch)
+![FastAPI](https://img.shields.io/badge/FastAPI-serving-009688?logo=fastapi)
+![MLflow](https://img.shields.io/badge/MLflow-tracking-0194E2?logo=mlflow)
+![Dataset](https://img.shields.io/badge/Dataset-MovieLens%2032M-orange)
